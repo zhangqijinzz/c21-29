@@ -14,6 +14,8 @@ export interface ScenarioComparison {
 function describeNodeChanges(
   before: RequestNode,
   after: RequestNode,
+  beforeNodes: Map<string, RequestNode>,
+  afterNodes: Map<string, RequestNode>,
 ): string[] {
   const changes: string[] = [];
   if (before.durationMs !== after.durationMs)
@@ -38,8 +40,18 @@ function describeNodeChanges(
     );
   if (before.fallbackNodeId !== after.fallbackNodeId)
     changes.push(`${before.name} · 降级目标已调整`);
-  if (before.dependencyIds.join("|") !== after.dependencyIds.join("|"))
-    changes.push(`${before.name} · 前置依赖已调整`);
+  const beforeDeps = new Set(before.dependencyIds);
+  const afterDeps = new Set(after.dependencyIds);
+  const dependencyName = (id: string) =>
+    afterNodes.get(id)?.name ?? beforeNodes.get(id)?.name ?? id;
+  for (const id of before.dependencyIds) {
+    if (!afterDeps.has(id))
+      changes.push(`${before.name} · 前置依赖 −「${dependencyName(id)}」`);
+  }
+  for (const id of after.dependencyIds) {
+    if (!beforeDeps.has(id))
+      changes.push(`${before.name} · 前置依赖 ＋「${dependencyName(id)}」`);
+  }
   return changes;
 }
 
@@ -55,7 +67,7 @@ export function compareScenarios(
     ...baseline.nodes.flatMap((node) => {
       const next = comparisonNodes.get(node.id);
       return next
-        ? describeNodeChanges(node, next)
+        ? describeNodeChanges(node, next, baselineNodes, comparisonNodes)
         : [`${node.name} · 已从对照方案移除`];
     }),
     ...comparison.nodes

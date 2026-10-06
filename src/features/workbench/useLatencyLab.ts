@@ -16,6 +16,7 @@ import {
   patchRequestNode,
   removeRequestNode,
   setConcurrency,
+  tidyProjectDependencies,
   toggleDependency,
   getGraphAnalysis,
 } from "../graph-editor/graphViewModel";
@@ -211,6 +212,33 @@ export function useLatencyLab() {
     },
     [activeProject, editProject],
   );
+  const tidyDependencies = useCallback(() => {
+    if (!activeProject) return;
+    const outcome = tidyProjectDependencies(activeProject);
+    if (!outcome.removedEdges.length && !outcome.movedCount) {
+      setNotice("依赖关系已符合整理建议，无需调整。");
+      return;
+    }
+    const before = simulateProject(activeProject, mode);
+    const after = simulateProject(outcome.project, mode);
+    editProject(outcome.project);
+    const actions: string[] = [];
+    if (outcome.removedEdges.length)
+      actions.push(`移除 ${outcome.removedEdges.length} 条多余连线`);
+    if (outcome.movedCount)
+      actions.push(`重排 ${outcome.movedCount} 个节点的分段顺序`);
+    const formatBudget = (value: number) =>
+      value < 1000
+        ? `${Math.round(value)} ms`
+        : `${(value / 1000).toFixed(2)} s`;
+    const budget =
+      after.completionMs === before.completionMs
+        ? `完成预算保持 ${formatBudget(after.completionMs)}`
+        : `完成预算 ${formatBudget(before.completionMs)} → ${formatBudget(after.completionMs)}`;
+    setNotice(
+      `依赖整理完成：${actions.join("、")}；${budget}。已保存的方案快照不受影响。`,
+    );
+  }, [activeProject, editProject, mode]);
 
   const simulate = useCallback(
     (nextMode = mode) => {
@@ -290,6 +318,7 @@ export function useLatencyLab() {
     deleteNode,
     setNodeDependency,
     setLimit,
+    tidyDependencies,
     simulate,
     saveSnapshot,
     removeSavedScenario,

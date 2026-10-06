@@ -9,8 +9,43 @@ import {
   restoreScenario,
   saveScenario,
 } from "../src/features/scenarios/scenarioViewModel";
+import { tidyProjectDependencies } from "../src/features/graph-editor/graphViewModel";
 import { simulateProject } from "../src/shared/domain/simulation";
 import { EXAMPLE_PROJECT } from "../src/shared/domain/types";
+import type { RequestNode } from "../src/shared/domain/types";
+
+const tidyFixture: RequestNode[] = [
+  {
+    id: "a",
+    name: "网关鉴权",
+    durationMs: 100,
+    jitterMs: 0,
+    dependencyIds: [],
+    timeoutMs: 500,
+    retryCount: 0,
+    failureRate: 0,
+  },
+  {
+    id: "b",
+    name: "账户信息",
+    durationMs: 100,
+    jitterMs: 0,
+    dependencyIds: ["a"],
+    timeoutMs: 500,
+    retryCount: 0,
+    failureRate: 0,
+  },
+  {
+    id: "c",
+    name: "权益校验",
+    durationMs: 100,
+    jitterMs: 0,
+    dependencyIds: ["b", "a"],
+    timeoutMs: 500,
+    retryCount: 0,
+    failureRate: 0,
+  },
+];
 
 describe("project and scenario view models", () => {
   it("creates a project and switches the active project", () => {
@@ -85,5 +120,39 @@ describe("project and scenario view models", () => {
     expect(comparison.deltaMs).toBeGreaterThan(0);
     expect(comparison.changes.join(" ")).toContain("并发上限");
     expect(comparison.changes.join(" ")).toContain("耗时");
+  });
+
+  it("keeps saved snapshots untouched when tidying dependencies", () => {
+    const base = { ...EXAMPLE_PROJECT, nodes: tidyFixture };
+    const saved = saveScenario(base, simulateProject(base), "整理前");
+    const outcome = tidyProjectDependencies(saved);
+    expect(outcome.removedEdges).toEqual([{ nodeId: "c", dependencyId: "a" }]);
+    expect(outcome.project.scenarios).toBe(saved.scenarios);
+    expect(outcome.project.scenarios[0]?.nodes).toEqual(
+      saved.scenarios[0]?.nodes,
+    );
+    const clean = tidyProjectDependencies(outcome.project);
+    expect(clean.removedEdges).toHaveLength(0);
+    expect(clean.movedCount).toBe(0);
+    expect(clean.project).toBe(outcome.project);
+  });
+
+  it("names added and removed dependencies when comparing snapshots", () => {
+    const base = { ...EXAMPLE_PROJECT, nodes: tidyFixture };
+    const beforeSnapshot = saveScenario(base, simulateProject(base), "整理前")
+      .scenarios[0];
+    const tidied = tidyProjectDependencies(base).project;
+    const afterSnapshot = saveScenario(
+      tidied,
+      simulateProject(tidied),
+      "整理后",
+    ).scenarios[0];
+    if (!beforeSnapshot || !afterSnapshot)
+      throw new Error("Scenario fixtures should be saved");
+    const comparison = compareScenarios(beforeSnapshot, afterSnapshot);
+    expect(comparison.changes.join(" ")).toContain("前置依赖 −「网关鉴权」");
+    expect(comparison.deltaMs).toBe(0);
+    const reverse = compareScenarios(afterSnapshot, beforeSnapshot);
+    expect(reverse.changes.join(" ")).toContain("前置依赖 ＋「网关鉴权」");
   });
 });

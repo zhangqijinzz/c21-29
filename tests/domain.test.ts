@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { analyzeGraph } from "../src/shared/domain/graph";
+import { analyzeGraph, tidyDependencies } from "../src/shared/domain/graph";
 import { EXAMPLE_PROJECT } from "../src/shared/domain/types";
+import type { RequestNode } from "../src/shared/domain/types";
 import { simulateProject } from "../src/shared/domain/simulation";
 import {
   addRequestNode,
   toggleDependency,
 } from "../src/features/graph-editor/graphViewModel";
+
+function makeNode(
+  id: string,
+  name: string,
+  dependencyIds: string[] = [],
+): RequestNode {
+  return {
+    id,
+    name,
+    durationMs: 100,
+    jitterMs: 0,
+    dependencyIds,
+    timeoutMs: 500,
+    retryCount: 0,
+    failureRate: 0,
+  };
+}
 
 describe("request dependency graph", () => {
   it("orders a DAG and detects a cycle before simulation", () => {
@@ -98,5 +116,80 @@ describe("request dependency graph", () => {
     expect(next.nodes).toHaveLength(1);
     expect(next.nodes[0]?.durationMs).toBe(400);
     expect(next.nodes[0]?.dependencyIds).toEqual([]);
+  });
+});
+
+describe("dependency hygiene", () => {
+  it("flags transitively redundant edges instead of treating them as order conflicts", () => {
+    const project = {
+      ...EXAMPLE_PROJECT,
+      nodes: [
+        makeNode("a", "网关鉴权"),
+        makeNode("b", "账户信息", ["a"]),
+        makeNode("c", "权益校验", ["b", "a"]),
+      ],
+    };
+    const analysis = analyzeGraph(project);
+    expect(analysis.validation.errors).toHaveLength(0);
+    expect(analysis.dependencyIssues).toHaveLength(1);
+    const issue = analysis.dependencyIssues[0];
+    expect(issue?.kind).toBe("redundant");
+    expect(issue?.nodeId).toBe("c");
+    expect(issue?.dependencyId).toBe("a");
+    expect(issue?.message).toContain("多余");
+    expect(issue?.message).toContain("账户信息");
+    expect(analysis.validation.warnings.join(" ")).toContain("多余");
+  });
+
+  it("flags dependencies that point backwards against the segment order", () => {
+    const project = {
+      ...EXAMPLE_PROJECT,
+      nodes: [
+        makeNode("first", "先发请求", ["second"]),
+        makeNode("second", "后续请求"),
+      ],
+    };
+    const analysis = analyzeGraph(project);
+    expect(analysis.validation.errors).toHaveLength(0);
+    expect(analysis.dependencyIssues).toHaveLength(1);
+    expect(analysis.dependencyIssues[0]?.kind).toBe("order");
+    expect(analysis.dependencyIssues[0]?.message).toContain("顺序");
+  });
+
+  it("tidies redundant edges and segment order as one atomic step", () => {
+    const project = {
+      ...EXAMPLE_PROJECT,
+      nodes: [
+        makeNode("b", "账户信息", ["a"]),
+        makeNode("a", "网关鉴权"),
+        makeNode("c", "权益校验", ["b", "a"]),
+      ],
+    };
+    const before = simulateProject(project);
+    const tidy = tidyDependencies(project);
+    expect(tidy.removedEdges).toEqual([{ nodeId: "c", dependencyId: "a" }]);
+    expect(tidy.nodes.map((node) => node.id)).toEqual(["a", "b", "c"]);
+    expect(tidy.movedCount).toBe(2);
+    const after = simulateProject({ ...project, nodes: tidy.nodes });
+    expect(after.completionMs).toBe(before.completionMs);
+    expect(after.entries.map((entry) => entry.nodeId)).toEqual(
+      before.entries.map((entry) => entry.nodeId),
+    );
+    const reanalyzed = analyzeGraph({ ...project, nodes: tidy.nodes });
+    expect(reanalyzed.dependencyIssues).toHaveLength(0);
+    const again = tidyDependencies({ ...project, nodes: tidy.nodes });
+    expect(again.removedEdges).toHaveLength(0);
+    expect(again.movedCount).toBe(0);
+  });
+
+  it("refuses to tidy a graph that still has validation errors", () => {
+    const cyclic = {
+      ...EXAMPLE_PROJECT,
+      nodes: [makeNode("a", "甲", ["b"]), makeNode("b", "乙", ["a"])],
+    };
+    const tidy = tidyDependencies(cyclic);
+    expect(tidy.nodes).toBe(cyclic.nodes);
+    expect(tidy.removedEdges).toHaveLength(0);
+    expect(tidy.movedCount).toBe(0);
   });
 });

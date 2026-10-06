@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, GitBranch, CircleHelp } from "lucide-react";
+import { Plus, GitBranch, CircleHelp, ListChecks } from "lucide-react";
 import type { LatencyProject, RequestNode } from "../../shared/domain/types";
 import type { GraphAnalysis } from "../../shared/domain/graph";
 import NodeInspector from "./NodeInspector";
@@ -11,6 +11,7 @@ interface Props {
   onPatch: (id: string, patch: Partial<RequestNode>) => void;
   onDelete: (id: string) => void;
   onDependency: (id: string, dependencyId: string) => void;
+  onTidy: () => void;
 }
 
 export default function GraphEditor({
@@ -20,10 +21,17 @@ export default function GraphEditor({
   onPatch,
   onDelete,
   onDependency,
+  onTidy,
 }: Props) {
   const [selectedId, setSelectedId] = useState("");
   const selected =
     project.nodes.find((node) => node.id === selectedId) ?? project.nodes[0];
+  const issueCount = graph.dependencyIssues.length;
+  const health = graph.validation.errors.length
+    ? "danger"
+    : issueCount
+      ? "warn"
+      : "";
   return (
     <section className="module-page editor-page">
       <div className="module-heading">
@@ -43,11 +51,13 @@ export default function GraphEditor({
               <span className="section-label">依赖拓扑</span>
               <span className="muted-count">{project.nodes.length} NODES</span>
             </div>
-            <span
-              className={`graph-health ${graph.validation.errors.length ? "danger" : ""}`}
-            >
+            <span className={`graph-health ${health}`}>
               <i />
-              {graph.validation.errors.length ? "需要修复" : "DAG 就绪"}
+              {graph.validation.errors.length
+                ? "需要修复"
+                : issueCount
+                  ? "建议整理"
+                  : "DAG 就绪"}
             </span>
           </div>
           {!project.nodes.length ? (
@@ -122,6 +132,33 @@ export default function GraphEditor({
           />
         )}
       </div>
+      {issueCount > 0 && (
+        <div className="hygiene-panel">
+          <div className="hygiene-head">
+            <div>
+              <span className="section-label">依赖整理建议</span>
+              <span className="muted-count">{issueCount} 项</span>
+            </div>
+            <button className="button button-neutral" onClick={onTidy}>
+              <ListChecks size={14} /> 按建议一次性整理
+            </button>
+          </div>
+          <ul className="hygiene-list">
+            {graph.dependencyIssues.map((issue) => (
+              <li key={`${issue.nodeId}-${issue.dependencyId}`}>
+                <em
+                  className={`hygiene-tag ${
+                    issue.kind === "redundant" ? "tag-redundant" : "tag-order"
+                  }`}
+                >
+                  {issue.kind === "redundant" ? "多余连线" : "顺序冲突"}
+                </em>
+                <span>{issue.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {graph.validation.warnings.length > 0 && (
         <div className="warning-strip">{graph.validation.warnings[0]}</div>
       )}

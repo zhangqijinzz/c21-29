@@ -1,5 +1,12 @@
-import { analyzeGraph, updateNode } from "../../shared/domain/graph";
-import type { GraphAnalysis } from "../../shared/domain/graph";
+import {
+  analyzeGraph,
+  tidyDependencies,
+  updateNode,
+} from "../../shared/domain/graph";
+import type {
+  DependencyTidyResult,
+  GraphAnalysis,
+} from "../../shared/domain/graph";
 import type { LatencyProject, RequestNode } from "../../shared/domain/types";
 
 export type EditableNodeField =
@@ -81,6 +88,18 @@ export function toggleDependency(
   return cycle.length
     ? { project, error: "这条连线会形成循环依赖，已撤销" }
     : { project: next };
+}
+
+export function tidyProjectDependencies(
+  project: LatencyProject,
+): DependencyTidyResult & { project: LatencyProject } {
+  const tidy = tidyDependencies(project);
+  if (!tidy.removedEdges.length && !tidy.movedCount)
+    return { ...tidy, project };
+  return {
+    ...tidy,
+    project: { ...project, nodes: tidy.nodes, updatedAt: Date.now() },
+  };
 }
 
 export function setConcurrency(
