@@ -9,8 +9,40 @@ import {
   restoreScenario,
   saveScenario,
 } from "../src/features/scenarios/scenarioViewModel";
+import { tidyDependencies } from "../src/features/graph-editor/graphViewModel";
 import { simulateProject } from "../src/shared/domain/simulation";
-import { EXAMPLE_PROJECT } from "../src/shared/domain/types";
+import { EXAMPLE_PROJECT, type RequestNode } from "../src/shared/domain/types";
+
+function hygieneNode(
+  id: string,
+  name: string,
+  dependencyIds: string[],
+): RequestNode {
+  return {
+    id,
+    name,
+    durationMs: 100,
+    jitterMs: 0,
+    dependencyIds,
+    timeoutMs: 1000,
+    retryCount: 0,
+    failureRate: 0,
+  };
+}
+
+function hygieneProject() {
+  return {
+    ...EXAMPLE_PROJECT,
+    scenarios: [],
+    nodes: [
+      hygieneNode("a", "分段A", []),
+      hygieneNode("b", "分段B", ["a"]),
+      hygieneNode("c", "分段C", ["a", "b"]),
+      hygieneNode("d", "分段D", ["e"]),
+      hygieneNode("e", "分段E", []),
+    ],
+  };
+}
 
 describe("project and scenario view models", () => {
   it("creates a project and switches the active project", () => {
@@ -85,5 +117,42 @@ describe("project and scenario view models", () => {
     expect(comparison.deltaMs).toBeGreaterThan(0);
     expect(comparison.changes.join(" ")).toContain("并发上限");
     expect(comparison.changes.join(" ")).toContain("耗时");
+  });
+
+  it("keeps saved snapshots intact when dependencies are tidied", () => {
+    const project = hygieneProject();
+    const saved = saveScenario(project, simulateProject(project), "整理前");
+    const snapshot = saved.scenarios[0];
+    if (!snapshot) throw new Error("Scenario fixture should be saved");
+    const snapshotNodes = structuredClone(snapshot.nodes);
+    const outcome = tidyDependencies(saved);
+    expect(outcome.project.scenarios).toBe(saved.scenarios);
+    expect(outcome.project.scenarios[0]?.nodes).toEqual(snapshotNodes);
+    expect(snapshot.nodes.find((node) => node.id === "c")?.dependencyIds).toEqual(
+      ["a", "b"],
+    );
+  });
+
+  it("describes dependency changes between pre and post tidy snapshots", () => {
+    const project = hygieneProject();
+    const baseline = saveScenario(
+      project,
+      simulateProject(project),
+      "整理前",
+    ).scenarios[0];
+    const tidied = tidyDependencies(project).project;
+    const comparison = saveScenario(
+      tidied,
+      simulateProject(tidied),
+      "整理后",
+    ).scenarios[0];
+    if (!baseline || !comparison)
+      throw new Error("Scenario fixtures should be saved");
+    const result = compareScenarios(baseline, comparison);
+    const changes = result.changes.join(" ");
+    expect(changes).toContain("分段C · 移除前置「分段A」");
+    expect(changes).toContain("分段D · 移除前置「分段E」");
+    expect(changes).toContain("分段E · 新增前置「分段D」");
+    expect(result.deltaMs).toBe(0);
   });
 });

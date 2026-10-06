@@ -1,9 +1,75 @@
 import type { LatencyProject, RequestNode, ValidationResult } from "./types";
 
+export interface DependencyIssue {
+  kind: "redundant" | "reversed";
+  nodeId: string;
+  dependencyId: string;
+  viaId?: string;
+  message: string;
+}
+
 export interface GraphAnalysis {
   order: string[];
   cycle: string[];
+  issues: DependencyIssue[];
   validation: ValidationResult;
+}
+
+function collectReachable(
+  fromId: string,
+  dependencies: Map<string, string[]>,
+): Set<string> {
+  const visited = new Set<string>();
+  const stack = [...(dependencies.get(fromId) ?? [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!id || visited.has(id)) continue;
+    visited.add(id);
+    for (const next of dependencies.get(id) ?? []) stack.push(next);
+  }
+  return visited;
+}
+
+export function findDependencyIssues(
+  project: LatencyProject,
+): DependencyIssue[] {
+  const byId = new Map(project.nodes.map((node) => [node.id, node]));
+  const dependencies = new Map(
+    project.nodes.map((node) => [node.id, node.dependencyIds]),
+  );
+  const orderIndex = new Map(
+    project.nodes.map((node, index) => [node.id, index]),
+  );
+  const issues: DependencyIssue[] = [];
+  for (const node of project.nodes) {
+    for (const dependencyId of node.dependencyIds) {
+      const dependency = byId.get(dependencyId);
+      if (!dependency || dependencyId === node.id) continue;
+      const viaId = node.dependencyIds.find(
+        (other) =>
+          other !== dependencyId &&
+          collectReachable(other, dependencies).has(dependencyId),
+      );
+      if (viaId) {
+        issues.push({
+          kind: "redundant",
+          nodeId: node.id,
+          dependencyId,
+          viaId,
+          message: `「${node.name}」→「${dependency.name}」是多余连线：已经由「${byId.get(viaId)?.name ?? viaId}」间接依赖，可移除直连`,
+        });
+        continue;
+      }
+      if ((orderIndex.get(dependencyId) ?? 0) > (orderIndex.get(node.id) ?? 0))
+        issues.push({
+          kind: "reversed",
+          nodeId: node.id,
+          dependencyId,
+          message: `「${node.name}」→「${dependency.name}」是顺序冲突：依赖方向与分段推进顺序相反，建议反转`,
+        });
+    }
+  }
+  return issues;
 }
 
 export function analyzeGraph(project: LatencyProject): GraphAnalysis {
@@ -104,7 +170,9 @@ export function analyzeGraph(project: LatencyProject): GraphAnalysis {
   ) {
     warnings.push("多个入口节点会同时开始；并发上限可能让部分入口排队");
   }
-  return { order, cycle, validation: { errors, warnings } };
+  const issues = findDependencyIssues(project);
+  for (const issue of issues) warnings.push(issue.message);
+  return { order, cycle, issues, validation: { errors, warnings } };
 }
 
 export function updateNode(

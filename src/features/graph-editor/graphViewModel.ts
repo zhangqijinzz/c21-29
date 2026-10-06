@@ -89,3 +89,155 @@ export function setConcurrency(
 ): LatencyProject {
   return { ...project, concurrencyLimit: value, updatedAt: Date.now() };
 }
+
+export interface TidyChange {
+  kind: "removed" | "reversed";
+  nodeId: string;
+  dependencyId: string;
+  summary: string;
+}
+
+export interface TidySkip {
+  nodeId: string;
+  dependencyId: string;
+  reason: string;
+}
+
+export interface TidyOutcome {
+  project: LatencyProject;
+  changes: TidyChange[];
+  skipped: TidySkip[];
+}
+
+function reachableFrom(
+  dependencies: Map<string, string[]>,
+  fromId: string,
+): Set<string> {
+  const visited = new Set<string>();
+  const stack = [...(dependencies.get(fromId) ?? [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!id || visited.has(id)) continue;
+    visited.add(id);
+    for (const next of dependencies.get(id) ?? []) stack.push(next);
+  }
+  return visited;
+}
+
+function formsCycle(
+  project: LatencyProject,
+  dependencies: Map<string, string[]>,
+): boolean {
+  return (
+    analyzeGraph({
+      ...project,
+      nodes: project.nodes.map((node) => ({
+        ...node,
+        dependencyIds: dependencies.get(node.id) ?? [],
+      })),
+    }).cycle.length > 0
+  );
+}
+
+/**
+ * 依赖整理：作为一个整体动作，一次性反转顺序冲突、归约多余连线。
+ * 只重写 nodes 的依赖关系，不触碰 scenarios 等历史快照。
+ */
+export function tidyDependencies(project: LatencyProject): TidyOutcome {
+  const byId = new Map(project.nodes.map((node) => [node.id, node]));
+  const orderIndex = new Map(
+    project.nodes.map((node, index) => [node.id, index]),
+  );
+  const dependencies = new Map(
+    project.nodes.map((node) => [node.id, [...node.dependencyIds]]),
+  );
+  const changes: TidyChange[] = [];
+  const skipped: TidySkip[] = [];
+  const nameOf = (id: string) => byId.get(id)?.name ?? id;
+
+  // 顺序冲突：把与分段推进顺序相反的连线反转到一致
+  for (const node of project.nodes) {
+    for (const dependencyId of node.dependencyIds) {
+      if (!byId.has(dependencyId) || dependencyId === node.id) continue;
+      if ((orderIndex.get(dependencyId) ?? 0) <= (orderIndex.get(node.id) ?? 0))
+        continue;
+      const current = dependencies.get(node.id) ?? [];
+      if (!current.includes(dependencyId)) continue;
+      const via = current.find(
+        (other) =>
+          other !== dependencyId &&
+          reachableFrom(dependencies, other).has(dependencyId),
+      );
+      if (via) continue; // 多余连线交给归约阶段移除
+      const dependencyDeps = dependencies.get(dependencyId) ?? [];
+      if (dependencyDeps.includes(node.id)) {
+        skipped.push({
+          nodeId: node.id,
+          dependencyId,
+          reason: `「${nameOf(dependencyId)}」已依赖「${nameOf(node.id)}」，保留原连线`,
+        });
+        continue;
+      }
+      dependencies.set(
+        node.id,
+        current.filter((id) => id !== dependencyId),
+      );
+      dependencies.set(dependencyId, [...dependencyDeps, node.id]);
+      if (formsCycle(project, dependencies)) {
+        dependencies.set(node.id, current);
+        dependencies.set(dependencyId, dependencyDeps);
+        skipped.push({
+          nodeId: node.id,
+          dependencyId,
+          reason: `「${nameOf(node.id)}」→「${nameOf(dependencyId)}」反转后会形成循环，保留原连线`,
+        });
+      } else {
+        changes.push({
+          kind: "reversed",
+          nodeId: node.id,
+          dependencyId,
+          summary: `反转顺序冲突：「${nameOf(dependencyId)}」改为依赖「${nameOf(node.id)}」`,
+        });
+      }
+    }
+  }
+
+  // 多余连线：已间接可达的直连做传递归约
+  for (const node of project.nodes) {
+    for (const dependencyId of [...(dependencies.get(node.id) ?? [])]) {
+      const current = dependencies.get(node.id) ?? [];
+      const via = current.find(
+        (other) =>
+          other !== dependencyId &&
+          reachableFrom(dependencies, other).has(dependencyId),
+      );
+      if (!via) continue;
+      dependencies.set(
+        node.id,
+        current.filter((id) => id !== dependencyId),
+      );
+      changes.push({
+        kind: "removed",
+        nodeId: node.id,
+        dependencyId,
+        summary: `移除多余连线：「${nameOf(node.id)}」已经由「${nameOf(via)}」间接依赖「${nameOf(dependencyId)}」`,
+      });
+    }
+  }
+
+  if (!changes.length) return { project, changes, skipped };
+  return {
+    project: {
+      ...project,
+      nodes: project.nodes.map((node) => {
+        const next = dependencies.get(node.id) ?? [];
+        return next.join("|") === node.dependencyIds.join("|")
+          ? node
+          : { ...node, dependencyIds: next };
+      }),
+      updatedAt: Date.now(),
+    },
+    changes,
+    skipped,
+  };
+}

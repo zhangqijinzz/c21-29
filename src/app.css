@@ -1086,6 +1086,51 @@ button:disabled {
 .graph-hint svg {
   color: #a0ad98;
 }
+.tidy-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.tidy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.tidy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tidy-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: #6b756c;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.tidy-tag {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 8px;
+  font-style: normal;
+}
+.tag-redundant {
+  color: #5f7a4e;
+  background: #f0f5e6;
+}
+.tag-conflict {
+  color: #8a7541;
+  background: #fbf7e9;
+}
 .inline-error,
 .warning-strip {
   margin-top: 12px;

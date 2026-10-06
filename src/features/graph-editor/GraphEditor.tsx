@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, GitBranch, CircleHelp } from "lucide-react";
+import { Plus, GitBranch, CircleHelp, Sparkles } from "lucide-react";
 import type { LatencyProject, RequestNode } from "../../shared/domain/types";
 import type { GraphAnalysis } from "../../shared/domain/graph";
 import NodeInspector from "./NodeInspector";
@@ -11,6 +11,7 @@ interface Props {
   onPatch: (id: string, patch: Partial<RequestNode>) => void;
   onDelete: (id: string) => void;
   onDependency: (id: string, dependencyId: string) => void;
+  onTidy: () => void;
 }
 
 export default function GraphEditor({
@@ -20,6 +21,7 @@ export default function GraphEditor({
   onPatch,
   onDelete,
   onDependency,
+  onTidy,
 }: Props) {
   const [selectedId, setSelectedId] = useState("");
   const selected =
@@ -47,7 +49,11 @@ export default function GraphEditor({
               className={`graph-health ${graph.validation.errors.length ? "danger" : ""}`}
             >
               <i />
-              {graph.validation.errors.length ? "需要修复" : "DAG 就绪"}
+              {graph.validation.errors.length
+                ? "需要修复"
+                : graph.issues.length
+                  ? "建议整理"
+                  : "DAG 就绪"}
             </span>
           </div>
           {!project.nodes.length ? (
@@ -101,6 +107,34 @@ export default function GraphEditor({
                   </button>
                 );
               })}
+            </div>
+          )}
+          {graph.issues.length > 0 && (
+            <div className="tidy-panel">
+              <div className="tidy-head">
+                <span className="section-label">
+                  依赖体检 · {graph.issues.length} 项建议
+                </span>
+                <button className="button button-primary" onClick={onTidy}>
+                  <Sparkles size={14} /> 按建议一键整理
+                </button>
+              </div>
+              <ul className="tidy-list">
+                {graph.issues.map((issue) => (
+                  <li key={`${issue.nodeId}-${issue.dependencyId}`}>
+                    <em
+                      className={`tidy-tag ${
+                        issue.kind === "redundant"
+                          ? "tag-redundant"
+                          : "tag-conflict"
+                      }`}
+                    >
+                      {issue.kind === "redundant" ? "多余连线" : "顺序冲突"}
+                    </em>
+                    <span>{issue.message}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {graph.validation.errors.length > 0 && (

@@ -17,6 +17,7 @@ import {
   removeRequestNode,
   setConcurrency,
   toggleDependency,
+  tidyDependencies,
   getGraphAnalysis,
 } from "../graph-editor/graphViewModel";
 import {
@@ -212,6 +213,90 @@ export function useLatencyLab() {
     [activeProject, editProject],
   );
 
+  const tidyGraph = useCallback(() => {
+    const project = activeProject;
+    if (!project) return;
+    const preview = tidyDependencies(project);
+    if (!preview.changes.length) {
+      setNotice(
+        preview.skipped.length
+          ? preview.skipped.map((item) => item.reason).join("；")
+          : "依赖关系已经整洁，没有需要整理的连线。",
+      );
+      return;
+    }
+    const formatMs = (value: number) =>
+      value < 1000
+        ? `${Math.round(value)} ms`
+        : `${(value / 1000).toFixed(2)} s`;
+    const timeTag = new Date().toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    // 整理前快照：保留历史依赖关系，供方案对比追溯
+    const beforeResult = simulateProject(project, mode);
+    const beforeValid =
+      project.nodes.length > 0 &&
+      beforeResult.entries.length === project.nodes.length;
+    let next = project;
+    let baselineId = "";
+    if (beforeValid) {
+      const withBaseline = saveScenario(
+        next,
+        beforeResult,
+        `整理前 · 自动快照 ${timeTag}`,
+      );
+      if (withBaseline.scenarios.length === next.scenarios.length + 1) {
+        baselineId = withBaseline.scenarios[0]?.id ?? "";
+        next = withBaseline;
+      }
+    }
+    // 整理作为整体动作生效：单次提交，只重写依赖关系
+    const outcome = tidyDependencies(next);
+    next = outcome.project;
+    const afterResult = simulateProject(next, mode);
+    const afterValid =
+      next.nodes.length > 0 &&
+      afterResult.entries.length === next.nodes.length;
+    let comparisonId = "";
+    if (afterValid) {
+      const withComparison = saveScenario(
+        next,
+        afterResult,
+        `整理后 · 自动快照 ${timeTag}`,
+      );
+      if (withComparison.scenarios.length === next.scenarios.length + 1) {
+        comparisonId = withComparison.scenarios[0]?.id ?? "";
+        next = withComparison;
+      }
+    }
+    editProject(next);
+    if (baselineId && comparisonId)
+      setComparisonIds({ baselineId, comparisonId });
+    const removed = outcome.changes.filter(
+      (change) => change.kind === "removed",
+    ).length;
+    const reversed = outcome.changes.length - removed;
+    const parts = [
+      removed ? `移除 ${removed} 条多余连线` : "",
+      reversed ? `反转 ${reversed} 条顺序冲突` : "",
+      outcome.skipped.length
+        ? `${outcome.skipped.length} 条冲突因会成环保留`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("、");
+    const delta =
+      beforeValid && afterValid
+        ? `；完成预算 ${formatMs(beforeResult.completionMs)} → ${formatMs(afterResult.completionMs)}`
+        : "";
+    const compareHint =
+      baselineId && comparisonId
+        ? "；前后快照已保存，可在方案对比查看依赖变化"
+        : "";
+    setNotice(`依赖整理完成：${parts}${delta}${compareHint}。`);
+  }, [activeProject, mode, editProject]);
+
   const simulate = useCallback(
     (nextMode = mode) => {
       if (!activeProject) return undefined;
@@ -290,6 +375,7 @@ export function useLatencyLab() {
     deleteNode,
     setNodeDependency,
     setLimit,
+    tidyGraph,
     simulate,
     saveSnapshot,
     removeSavedScenario,

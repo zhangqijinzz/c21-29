@@ -14,6 +14,7 @@ export interface ScenarioComparison {
 function describeNodeChanges(
   before: RequestNode,
   after: RequestNode,
+  nameOf: (id: string) => string,
 ): string[] {
   const changes: string[] = [];
   if (before.durationMs !== after.durationMs)
@@ -38,8 +39,20 @@ function describeNodeChanges(
     );
   if (before.fallbackNodeId !== after.fallbackNodeId)
     changes.push(`${before.name} · 降级目标已调整`);
-  if (before.dependencyIds.join("|") !== after.dependencyIds.join("|"))
-    changes.push(`${before.name} · 前置依赖已调整`);
+  if (before.dependencyIds.join("|") !== after.dependencyIds.join("|")) {
+    const removed = before.dependencyIds.filter(
+      (id) => !after.dependencyIds.includes(id),
+    );
+    const added = after.dependencyIds.filter(
+      (id) => !before.dependencyIds.includes(id),
+    );
+    for (const id of removed)
+      changes.push(`${before.name} · 移除前置「${nameOf(id)}」`);
+    for (const id of added)
+      changes.push(`${before.name} · 新增前置「${nameOf(id)}」`);
+    if (!removed.length && !added.length)
+      changes.push(`${before.name} · 前置依赖顺序已调整`);
+  }
   return changes;
 }
 
@@ -51,11 +64,15 @@ export function compareScenarios(
   const comparisonNodes = new Map(
     comparison.nodes.map((node) => [node.id, node]),
   );
+  const nameOf = (id: string) =>
+    baselineNodes.get(id)?.name ??
+    comparisonNodes.get(id)?.name ??
+    "已删除节点";
   const changes = [
     ...baseline.nodes.flatMap((node) => {
       const next = comparisonNodes.get(node.id);
       return next
-        ? describeNodeChanges(node, next)
+        ? describeNodeChanges(node, next, nameOf)
         : [`${node.name} · 已从对照方案移除`];
     }),
     ...comparison.nodes
